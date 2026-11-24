@@ -7,6 +7,7 @@ Combines:
 
 import argparse
 import asyncio
+import os
 import uuid
 from typing import Optional
 
@@ -15,10 +16,12 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 
 from agent import create_security_review_app
+from fallback import AuditLogger, cli_approver, run_fallback_review, select_backend
 from observability import configure_logging, get_observability_plugins
 
 APP_NAME = "security_code_reviewer"
 DEFAULT_USER_ID = "security_reviewer_user"
+REPO_PATH_ENV = "SECURITY_REVIEW_REPO_PATH"
 
 
 # ============================================================================
@@ -71,6 +74,52 @@ def print_agent_events(events: list) -> None:
 
 
 # ============================================================================
+# Local fallback path (used when GitHub MCP is unavailable or forced off)
+# ============================================================================
+def run_fallback_workflow(
+    repo_name: str,
+    commit_id: str,
+    auto_approve: Optional[bool],
+    repo_path: Optional[str],
+    session_id: Optional[str],
+    audit: AuditLogger,
+    reason: str,
+) -> dict:
+    """Runs GitTool -> ScannerTool -> approval -> GitHubIssueTool and returns the same shape
+    as the MCP path: {"session_id", "state", "metrics"} (plus the structured fallback result)."""
+    session_id = session_id or f"sec_review_{uuid.uuid4().hex[:8]}"
+    print(f"\n{'=' * 70}")
+    print(f"Starting Security Code Review Session (LOCAL FALLBACK): {session_id}")
+    print(f"Repository: {repo_name} | Commit: {commit_id} | Reason: {reason}")
+    print(f"{'=' * 70}")
+
+    result = run_fallback_review(
+        repo_name=repo_name,
+        repo_path=repo_path or os.environ.get(REPO_PATH_ENV, ""),
+        commit_id=commit_id,
+        approver=cli_approver(auto_approve),
+        audit=audit,
+        selection_reason=reason,
+    )
+    data = result["data"]
+    print(f"\n[FallbackWorkflow] > {result['summary']}")
+    if data["issue"]:
+        print(f"Issue #{data['issue']['issue_number']}: {data['issue']['issue_url']}")
+    print(f"Audit trail: {audit.path} (run {audit.run_id})")
+
+    return {
+        "session_id": session_id,
+        "state": {
+            "final_issue_or_summary": result["summary"],
+            "approval_status": data["approval"],
+            "fallback_status": data["status"],
+        },
+        "metrics": {"backend": "fallback", "audit_run_id": data["audit_run_id"]},
+        "fallback_result": result,
+    }
+
+
+# ============================================================================
 # Main Stateful Multi-Agent Workflow Runner
 # ============================================================================
 async def run_security_review_workflow(
@@ -79,6 +128,7 @@ async def run_security_review_workflow(
     auto_approve: Optional[bool] = None,
     user_id: str = DEFAULT_USER_ID,
     session_id: Optional[str] = None,
+    repo_path: Optional[str] = None,
 ) -> dict:
     """Executes the 4-agent Security Code Review workflow with Session & Approval support.
 
@@ -91,11 +141,26 @@ async def run_security_review_workflow(
             - None: Prompts the user interactively in the terminal (y/n).
         user_id: User identifier for the ADK session.
         session_id: Optional custom session ID; generated automatically if omitted.
+        repo_path: Local clone of the repository. Only used by the local fallback path
+            (defaults to the SECURITY_REVIEW_REPO_PATH environment variable).
 
     Returns:
         Dictionary containing final session state and observability metrics.
     """
     configure_logging()
+
+    # Choose MCP or the local fallback. The MCP pipeline below is unchanged.
+    audit = AuditLogger()
+    backend = select_backend()
+    audit.record(
+        "backend_selected", "selector", backend["reason"], "success",
+        repository=repo_name, commit_id=commit_id, backend=backend["path"],
+    )
+    if backend["path"] == "fallback":
+        return run_fallback_workflow(
+            repo_name, commit_id, auto_approve, repo_path, session_id, audit, backend["reason"]
+        )
+
     plugins, metrics_plugin = get_observability_plugins()
 
     # Attach plugins directly to the resumable App (required by ADK when passing `app` to Runner)
@@ -153,6 +218,12 @@ async def run_security_review_workflow(
             approved = auto_approve
             print(f"🤖 Simulated Human Decision: {'APPROVE ✅' if approved else 'REJECT ❌'}")
 
+        audit.record(
+            "human_approval", "approval_gate", "Human decision on creating the issue via MCP", "success",
+            repository=repo_name, commit_id=commit_id, backend="mcp",
+            approval_decision="approved" if approved else "rejected",
+        )
+
         # STEP 3: Resume the exact invocation with the user's approval/rejection
         resumed_events = []
         async for event in runner.run_async(
@@ -172,6 +243,11 @@ async def run_security_review_workflow(
         session_id=session_id,
     )
     metrics = metrics_plugin.get_metrics_summary()
+    audit.record(
+        "workflow_completed", "pipeline", "MCP review finished", "success",
+        repository=repo_name, commit_id=commit_id, backend="mcp",
+        details={"agents_run": metrics["total_agent_invocations"]},
+    )
 
     print(f"\n{'=' * 70}")
     print("📊 Observability Metrics Summary:")
@@ -209,6 +285,12 @@ def main() -> None:
         default="interactive",
         help="Human approval mode: 'interactive' (prompt in CLI), 'approve', or 'reject'.",
     )
+    parser.add_argument(
+        "--repo-path",
+        default=None,
+        help="Local clone of the repository, used only by the local fallback path "
+        f"(or set {REPO_PATH_ENV}).",
+    )
     args = parser.parse_args()
 
     auto_approve: Optional[bool] = None
@@ -222,6 +304,7 @@ def main() -> None:
             repo_name=args.repo,
             commit_id=args.commit,
             auto_approve=auto_approve,
+            repo_path=args.repo_path,
         )
     )
 
