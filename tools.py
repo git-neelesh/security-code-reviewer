@@ -1,6 +1,7 @@
 """Custom Function Tools and GitHub MCP Toolsets for the Security Code Reviewer."""
 
 import os
+import logging
 
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
@@ -15,6 +16,7 @@ except ImportError:
     )
 
 GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
+logger = logging.getLogger("security_code_reviewer")
 
 
 def _is_no_security_issue(
@@ -48,8 +50,8 @@ def _is_no_security_issue(
 
 
 def _get_github_token() -> str:
-    """Retrieves GITHUB_TOKEN from environment or Kaggle secrets fallback."""
-    return os.environ.get("GITHUB_TOKEN", "")
+    """Retrieves GITHUB_TOKEN from the process environment."""
+    return os.environ.get("GITHUB_TOKEN", "").strip()
 
 
 def create_github_readonly_mcp_toolset() -> McpToolset:
@@ -68,7 +70,7 @@ def create_github_readonly_mcp_toolset() -> McpToolset:
                 "X-MCP-Readonly": "true",
             },
         ),
-        # tool_filter=["get_commit"],
+        tool_filter=["get_commit", "get_file_contents", "list_commits"],
     )
 
 
@@ -88,6 +90,7 @@ def create_github_write_mcp_toolset() -> McpToolset:
                 "X-MCP-Readonly": "false",
             },
         ),
+        tool_filter=["issue_write"],
     )
 
 
@@ -185,3 +188,97 @@ def request_security_issue_approval(
 
 
 approval_function_tool = FunctionTool(func=request_security_issue_approval)
+
+
+def github_mcp_methods() -> dict:
+    """Lists MCP methods used by the agents and their local dummy fallbacks."""
+    return {
+        "status": "ok",
+        "methods": [
+            {"mcp_method": "get_commit", "fallback_method": "get_commit_dummy", "read_only": True},
+            {"mcp_method": "get_diff", "fallback_method": "get_diff_dummy", "read_only": True},
+            {"mcp_method": "get_file_contents", "fallback_method": "get_file_contents_dummy", "read_only": True},
+            {"mcp_method": "list_commits", "fallback_method": "list_commits_dummy", "read_only": True},
+            {"mcp_method": "create_issue", "fallback_method": "create_issue_dummy", "read_only": False},
+            {"mcp_method": "issue_write", "fallback_method": "create_issue_dummy", "read_only": False},
+        ],
+    }
+
+
+def get_commit_dummy(owner: str, repo: str, sha: str) -> dict:
+    """Local dummy fallback for MCP get_commit. Makes no network requests."""
+    logger.warning("MCP fallback used: get_commit_dummy; MCP get_commit was not called successfully for %s@%s", f"{owner}/{repo}", sha)
+    return {
+        "status": "success",
+        "FETCH_STATUS": "SUCCESS",
+        "source": "dummy_fallback",
+        "repository": f"{owner}/{repo}",
+        "commit_id": sha,
+        "commit": {"message": "Dummy fallback commit", "author": "Fallback User"},
+        "files": [{
+            "filename": "src/example.py",
+            "status": "modified",
+            "patch": "@@ -1,1 +1,1 @@\n-old_dummy_value = True\n+old_dummy_value = False",
+        }],
+    }
+
+
+def get_diff_dummy(owner: str, repo: str, sha: str) -> dict:
+    """Local dummy fallback for MCP get_diff. Makes no network requests."""
+    logger.warning("MCP fallback used: get_diff_dummy; MCP get_diff was not called successfully for %s@%s", f"{owner}/{repo}", sha)
+    commit = get_commit_dummy(owner, repo, sha)
+    return {
+        "status": "success",
+        "FETCH_STATUS": "SUCCESS",
+        "source": "dummy_fallback",
+        "repository": f"{owner}/{repo}",
+        "commit_id": sha,
+        "diffs": commit["files"],
+    }
+
+
+def get_file_contents_dummy(owner: str, repo: str, path: str, sha: str) -> dict:
+    """Local dummy fallback for MCP get_file_contents. Makes no network requests."""
+    logger.warning("MCP fallback used: get_file_contents_dummy; MCP get_file_contents was not called successfully for %s@%s:%s", f"{owner}/{repo}", sha, path)
+    return {
+        "status": "success",
+        "FETCH_STATUS": "SUCCESS",
+        "source": "dummy_fallback",
+        "repository": f"{owner}/{repo}",
+        "commit_id": sha,
+        "path": path,
+        "content": "# Dummy fallback file content",
+    }
+
+
+def list_commits_dummy(owner: str, repo: str) -> dict:
+    """Local dummy fallback for MCP list_commits. Makes no network requests."""
+    logger.warning("MCP fallback used: list_commits_dummy; MCP list_commits was not called successfully for %s", f"{owner}/{repo}")
+    return {
+        "status": "success",
+        "FETCH_STATUS": "SUCCESS",
+        "source": "dummy_fallback",
+        "repository": f"{owner}/{repo}",
+        "commits": [{"sha": "dummy-sha", "message": "Dummy fallback commit"}],
+    }
+
+
+def create_issue_dummy(owner: str, repo: str, title: str, body: str) -> dict:
+    """Local dummy fallback for issue creation. Creates no remote GitHub issue."""
+    logger.warning("MCP fallback used: create_issue_dummy; MCP issue creation was not called successfully for %s", f"{owner}/{repo}")
+    return {
+        "status": "success",
+        "source": "dummy_fallback",
+        "issue_number": None,
+        "title": title,
+        "url": None,
+        "message": "Dummy issue fallback used; no remote GitHub issue was created.",
+    }
+
+
+github_mcp_methods_tool = FunctionTool(func=github_mcp_methods)
+get_commit_dummy_tool = FunctionTool(func=get_commit_dummy)
+get_diff_dummy_tool = FunctionTool(func=get_diff_dummy)
+get_file_contents_dummy_tool = FunctionTool(func=get_file_contents_dummy)
+list_commits_dummy_tool = FunctionTool(func=list_commits_dummy)
+create_issue_dummy_tool = FunctionTool(func=create_issue_dummy)

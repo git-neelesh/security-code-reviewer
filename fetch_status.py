@@ -71,3 +71,4 @@ def skip_agent_after_failed_commit_fetch(
         return None
 
     return types.Content(role="model", parts=[])
+

@@ -27,6 +27,12 @@ def security_review_agent() -> LlmAgent:
 Review the commit code details fetched by the previous agent:
 {commit_code_details}
 
+Fallback reporting rule:
+- Base fallback reporting only on the current fetched data. Add the notice only if it contains `source: dummy_fallback` or an actual `*_dummy` tool result.
+- If the fetched data says `Source: mcp` or is a real MCP result, do not include any MCP fallback notice.
+- If a fallback method was used, start the report with exactly: `MCP Fallback Notice: The GitHub MCP call was not completed successfully, so one or more MCP fallback methods were used. Repository or issue data may be simulated and MCP review operations may be limited.`
+- Do not label real MCP data as fallback/simulated data.
+
 Your responsibilities:
 1. Analyze the modified code and diffs for security vulnerabilities, including:
    - Hardcoded secrets, API keys, tokens, or credentials

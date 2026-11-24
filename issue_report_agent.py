@@ -5,7 +5,11 @@ from google.adk.models.google_llm import Gemini
 from google.genai import types
 
 from fetch_status import skip_agent_after_failed_commit_fetch
-from tools import create_github_write_mcp_toolset
+from tools import (
+    create_github_write_mcp_toolset,
+    create_issue_dummy_tool,
+    github_mcp_methods_tool,
+)
 
 MODEL_NAME = "gemini-3.5-flash-lite"
 
@@ -34,21 +38,25 @@ User Approval Decision:
 {summary_decision_output}
 
 Your responsibilities:
-1. Check whether the user's decision in `{summary_decision_output}` is `APPROVED` (or `status: approved`) versus `REJECTED` (or `status: rejected`).
-2. If the security analysis report states there are no actionable findings, no vulnerabilities, no security issue, or only informational/low risk results, treat this as a non-issue and do NOT call any GitHub issue creation tool.
-3. **IF APPROVED**:
-   - Only create a GitHub issue when there is an actual actionable security finding.
-   - Use the GitHub MCP server tool (`create_issue` / `issue_write`) to create a new issue in the same repository (`owner/repo`).
-   - Set the issue title to the proposed security issue title.
-   - Populate the issue body with the structured Security Analysis Report (commit ID, severity, affected files, impact, and remediation steps).
-   - Never include literal passwords, API keys, tokens, or other secret values in the issue title or body. If any appear in the report, replace each value with `[REDACTED]` before creating the issue, including inside code snippets.
-   - Return a confirmation to the user with the created GitHub issue number, title, and URL.
-4. **IF REJECTED**:
-   - Do NOT call any GitHub issue creation tool.
-   - State clearly that no GitHub issue was created per the user's rejection.
-   - Provide a concise, bulleted executive summary (3-5 bullet points) of the security analysis findings and recommended fixes for the user's reference.
-5. For a "no issue found" result, return a brief message such as: 'No security issue found; no GitHub issue was created.' and do not call the issue creation tool.
+1. Preserve a fallback notice only when the repository/security report explicitly proves that a local dummy tool was used. Do not infer fallback usage merely from the presence of a notice, old transcript text, or MCP tool availability.
+2. Check whether `{summary_decision_output}` is approved or rejected.
+3. If the report has no actionable findings, do NOT call any issue tool.
+4. IF APPROVED:
+   - First call the real GitHub MCP `issue_write` tool with `method: create`, `owner`, `repo`, `title`, and `body`.
+   - Do not call `create_issue_dummy` before attempting `issue_write`.
+   - Call `create_issue_dummy` only after `issue_write` itself returns an MCP initialization, connection, authentication, authorization, or tool-execution error.
+   - Never use the fallback because of stale MCP fallback text or because another agent mentioned fallback.
+   - Never include literal passwords, API keys, tokens, or other secrets in the title or body.
+   - Return the real issue number and URL when `issue_write` succeeds.
+   - If fallback is actually used, clearly state that no remote issue was created.
+5. IF REJECTED:
+   - Do NOT call either issue tool.
+   - State that no issue was created and provide a concise 3-5 bullet executive summary.
 """,
-        tools=[create_github_write_mcp_toolset()],
+        tools=[
+            create_github_write_mcp_toolset(),
+            github_mcp_methods_tool,
+            create_issue_dummy_tool,
+        ],
         output_key="final_issue_or_summary",
     )
