@@ -6,6 +6,8 @@ from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 from google.adk.tools.tool_context import ToolContext
 
+from fallback.selection import DEFAULT_GITHUB_MCP_URL, get_github_mcp_url
+
 # Support StreamableHTTPServerParams as shown in Day-2b sample notebook
 try:
     from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPServerParams
@@ -14,7 +16,7 @@ except ImportError:
         StreamableHTTPConnectionParams as StreamableHTTPServerParams,
     )
 
-GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
+GITHUB_MCP_URL = DEFAULT_GITHUB_MCP_URL  # override at run time with the GITHUB_MCP_URL env var
 
 
 def _is_no_security_issue(
@@ -61,7 +63,7 @@ def create_github_readonly_mcp_toolset() -> McpToolset:
     github_token = _get_github_token()
     return McpToolset(
         connection_params=StreamableHTTPServerParams(
-            url=GITHUB_MCP_URL,
+            url=get_github_mcp_url(),
             headers={
                 "Authorization": f"Bearer {github_token}",
                 "X-MCP-Toolsets": "all",
@@ -81,7 +83,7 @@ def create_github_write_mcp_toolset() -> McpToolset:
     github_token = _get_github_token()
     return McpToolset(
         connection_params=StreamableHTTPServerParams(
-            url=GITHUB_MCP_URL,
+            url=get_github_mcp_url(),
             headers={
                 "Authorization": f"Bearer {github_token}",
                 "X-MCP-Toolsets": "repos,issues",

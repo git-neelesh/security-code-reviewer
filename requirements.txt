@@ -1,2 +1,2 @@
 google-adk>=2.12.0
-google-adk[eval]>=2.12.0
+google-adk[mcp,eval]>=2.12.0
